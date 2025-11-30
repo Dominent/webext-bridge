@@ -22,7 +22,7 @@
   },
   "author": "Neek Sandhu <neek.sandhu@outlook.com>",
   "scripts": {
-    "build": "tsup src/index.ts src/background.ts src/content-script.ts src/devtools.ts src/options.ts src/popup.ts src/window.ts src/iframe.ts --format esm,cjs --dts",
+    "build": "tsup src/index.ts src/background.ts src/content-script.ts src/devtools.ts src/options.ts src/popup.ts src/window.ts --format esm,cjs --dts",
     "watch": "npm run build -- --watch",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
@@ -58,10 +58,6 @@
     "./window": {
       "import": "./dist/window.js",
       "require": "./dist/window.cjs"
-    },
-    "./iframe": {
-      "import": "./dist/iframe.js",
-      "require": "./dist/iframe.cjs"
     }
   },
   "typesVersions": {
@@ -86,9 +82,6 @@
       ],
       "window": [
         "dist/window.d.ts"
-      ],
-      "iframe": [
-        "dist/iframe.d.ts"
       ]
     }
   },

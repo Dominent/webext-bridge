@@ -7,7 +7,6 @@ export type RuntimeContext =
   | 'options'
   | 'content-script'
   | 'window'
-  | 'iframe'
 
 export interface Endpoint {
   context: RuntimeContext

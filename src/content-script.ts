@@ -7,21 +7,15 @@ import type { InternalMessage } from './types'
 const win = usePostMessaging('content-script')
 const port = createPersistentPort()
 const endpointRuntime = createEndpointRuntime('content-script', (message) => {
-  // Always route replies through background since we can't determine if the destination is local or cross-tab
-  if (message.messageType === 'reply') {
-    port.postMessage(message)
-  }
-  else if (message.destination.context === 'window' || message.destination.context === 'iframe')
-    win.postMessage(message)
+  if (message.destination.context === 'window') win.postMessage(message)
   else port.postMessage(message)
 })
 
 win.onMessage((message: InternalMessage) => {
   endpointRuntime.handleMessage(Object.assign({}, message, {origin: {
-    // a message event inside `content-script` means a script inside `window` or `iframe` dispatched it to be forwarded
+    // a message event inside `content-script` means a script inside `window` dispatched it to be forwarded
     // so we're making sure that the origin is not tampered (i.e script is not masquerading it's true identity)
-    // Preserve iframe context if it's from iframe, otherwise treat as window
-    context: message.origin.context === 'iframe' ? 'iframe' : 'window',
+    context: "window",
     tabId: null
   }}))
 })

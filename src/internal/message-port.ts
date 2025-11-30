@@ -7,7 +7,7 @@ let promise: Promise<MessagePort>
  * is accepted OR a port will be offered, which the other side will then accept.
  */
 export const getMessagePort = (
-  thisContext: 'window' | 'content-script' | 'iframe' | 'popup' | 'options' | 'devtools',
+  thisContext: 'window' | 'content-script',
   namespace: string,
   onMessage: (e: MessageEvent<any>) => void,
 ): Promise<MessagePort> => (
@@ -33,9 +33,7 @@ export const getMessagePort = (
         onMessage?.(event)
       }
 
-      // For iframe context, post to parent window. For other contexts, post to current window
-      const targetWindow = thisContext === 'iframe' ? window.parent : window
-      targetWindow.postMessage({
+      window.postMessage({
         cmd: 'webext-port-offer',
         scope: namespace,
         context: thisContext,
@@ -44,22 +42,11 @@ export const getMessagePort = (
 
     window.addEventListener('message', acceptMessagingPort)
 
-    // Determine if this context should offer or only accept
-    // - Extension pages (popup/options/devtools) only accept from iframes, never offer
-    // - Iframe always offers to parent
-    // - Window waits then offers (for content-script compatibility)
-    // - Content-script offers immediately (for window compatibility)
-    const shouldOffer = thisContext !== 'popup' && thisContext !== 'options' && thisContext !== 'devtools'
-
-    if (!shouldOffer) {
-      // Extension pages only accept, never offer - iframe will always offer to them
-      // No action needed - just wait for iframe to offer
-    } else if (thisContext === 'window') {
-      // Window context waits before offering (original behavior)
+    // one of the contexts needs to be offset by at least 1 tick to prevent a race condition
+    // where both of them are offering, and then also accepting the port at the same time
+    if (thisContext === 'window')
       setTimeout(offerMessagingPort, 0)
-    } else {
-      // iframe and content-script offer immediately
+    else
       offerMessagingPort()
-    }
   })
 )
