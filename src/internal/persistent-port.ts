@@ -25,6 +25,12 @@ export const createPersistentPort = (name = '') => {
   >()
   const onFailureListeners = new Set<(message: InternalMessage) => void>()
 
+  // Exponential backoff for reconnection
+  let reconnectAttempts = 0
+  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+  const BASE_BACKOFF_MS = 100
+  const MAX_BACKOFF_MS = 30000
+
   const handleMessage = (msg: StatusMessage, port: Runtime.Port) => {
     switch (msg.status) {
       case 'undeliverable':
@@ -87,6 +93,12 @@ export const createPersistentPort = (name = '') => {
   }
 
   const connect = () => {
+    // Clear any pending reconnection timeout
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout)
+      reconnectTimeout = null
+    }
+
     port = browser.runtime.connect({
       name: encodeConnectionArgs({
         endpointName: name,
@@ -94,7 +106,26 @@ export const createPersistentPort = (name = '') => {
       }),
     })
     port.onMessage.addListener(handleMessage)
-    port.onDisconnect.addListener(connect)
+    port.onDisconnect.addListener(() => {
+      const error = browser.runtime.lastError
+      if (error) {
+        // Background unavailable - use exponential backoff
+        reconnectAttempts++
+        const backoffMs = Math.min(
+          BASE_BACKOFF_MS * Math.pow(2, reconnectAttempts - 1),
+          MAX_BACKOFF_MS,
+        )
+        reconnectTimeout = setTimeout(connect, backoffMs)
+      }
+      else {
+        // Normal disconnect - small delay and reset attempts
+        reconnectAttempts = 0
+        reconnectTimeout = setTimeout(connect, 50)
+      }
+    })
+
+    // Reset reconnection counter on successful connection
+    reconnectAttempts = 0
 
     PortMessage.toBackground(port, {
       type: 'sync',

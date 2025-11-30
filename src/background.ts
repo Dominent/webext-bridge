@@ -21,6 +21,7 @@ const pendingResponses = createDeliveryLogger()
 const connMap = new Map<string, PortConnection>()
 const oncePortConnectedCbs = new Map<string, Set<() => void>>()
 const onceSessionEndCbs = new Map<EndpointFingerprint, Set<() => void>>()
+const requestSources = new Map<string, string>() // transactionId -> source endpoint name
 
 const oncePortConnected = (endpointName: string, cb: () => void) => {
   oncePortConnectedCbs.set(
@@ -143,18 +144,64 @@ const endpointRuntime = createEndpointRuntime(
       )
     }
 
-    const resolvedSender = formatEndpoint({
-      ...message.origin,
-      ...(message.origin.context === 'window' && { context: 'content-script' }),
-    })
+    const isPageContext = (ctx: string) => ctx === 'window' || ctx === 'iframe'
+    const isExtensionPage = (ctx: string) => ctx === 'popup' || ctx === 'options' || ctx === 'devtools'
 
-    const resolvedDestination = formatEndpoint({
-      ...message.destination,
-      ...(message.destination.context === 'window' && {
-        context: 'content-script',
-      }),
-      tabId: message.destination.tabId || message.origin.tabId,
-    })
+    // Determine the actual sender endpoint for routing
+    // - For window/iframe contexts from content-script, resolve to content-script
+    // - For iframe contexts from extension pages (popup/options/devtools), keep the parent extension page as sender
+    const getSenderEndpoint = () => {
+      if (message.origin.context === 'iframe') {
+        // Check if message came from an extension page by looking at the hops
+        // Use second-to-last hop since background adds itself as the last hop before this runs
+        const extensionPageHop = message.hops?.at(-2)
+        if (extensionPageHop) {
+          // Extract context from hop string (format: "context::runtimeId")
+          const hopContext = extensionPageHop.split('::')[0]
+          if (isExtensionPage(hopContext)) {
+            // Iframe in extension page - route through parent extension page
+            // Don't spread message.origin as it may contain invalid tabId (NaN) for iframes
+            return hopContext as any
+          }
+        }
+      }
+      // Default routing: window/iframe through content-script
+      return formatEndpoint({
+        ...message.origin,
+        ...(isPageContext(message.origin.context) && { context: 'content-script' }),
+      })
+    }
+
+    const resolvedSender = getSenderEndpoint()
+
+    // For replies to iframe/window, route back through the extension page that forwarded the original message
+    const getReplyDestination = () => {
+      // Apply this logic for all replies to page contexts (iframe/window)
+      if (message.messageType === 'reply' && isPageContext(message.destination.context)) {
+        // Look up which endpoint sent the original request
+        const requestSource = requestSources.get(message.transactionId)
+        if (requestSource) {
+          // Clean up the tracking
+          requestSources.delete(message.transactionId)
+
+          // If the source is an extension page, route reply back through it
+          const sourceContext = parseEndpoint(requestSource).context
+          if (isExtensionPage(sourceContext)) {
+            return requestSource
+          }
+        }
+      }
+      // Default behavior
+      return formatEndpoint({
+        ...message.destination,
+        ...(isPageContext(message.destination.context) && {
+          context: 'content-script',
+        }),
+        tabId: message.destination.tabId || message.origin.tabId,
+      })
+    }
+
+    const resolvedDestination = getReplyDestination()
 
     // downstream endpoints are agnostic of these attributes, presence of these attrs will make them think the message is not intended for them
     message.destination.tabId = null
@@ -182,10 +229,21 @@ const endpointRuntime = createEndpointRuntime(
       if (message.messageType === 'reply')
         pendingResponses.remove(message.messageID)
 
-      if (sender()) {
-        notifyEndpoint(resolvedSender)
-          .withFingerprint(sender().fingerprint)
-          .aboutSuccessfulDelivery(receipt)
+      // Only notify sender if it's not background itself
+      if (message.origin.context !== 'background') {
+        const senderConn = sender()
+        if (senderConn) {
+          notifyEndpoint(resolvedSender)
+            .withFingerprint(senderConn.fingerprint)
+            .aboutSuccessfulDelivery(receipt)
+        } else {
+          console.error('[webext-bridge/background] Sender not found:', {
+            resolvedSender,
+            connMapKeys: [...connMap.keys()],
+            messageOrigin: message.origin,
+            hops: message.hops
+          })
+        }
       }
     }
 
@@ -206,12 +264,40 @@ const endpointRuntime = createEndpointRuntime(
     }
   },
   (message) => {
-    const resolvedSender = formatEndpoint({
-      ...message.origin,
-      ...(message.origin.context === 'window' && { context: 'content-script' }),
-    })
+    const isPageContext = (ctx: string) => ctx === 'window' || ctx === 'iframe'
+    const isExtensionPage = (ctx: string) => ctx === 'popup' || ctx === 'options' || ctx === 'devtools'
 
+    // Use the same logic as routing to determine the actual sender
+    // NOTE: localMessage callback runs BEFORE background adds itself to hops, so use last hop
+    const getSenderEndpoint = () => {
+      if (message.origin.context === 'iframe') {
+        const lastHop = message.hops?.at(-1)
+        if (lastHop) {
+          const hopContext = lastHop.split('::')[0]
+          if (isExtensionPage(hopContext)) {
+            // Don't spread message.origin as it may contain invalid tabId (NaN) for iframes
+            return hopContext as any
+          }
+        }
+      }
+      return formatEndpoint({
+        ...message.origin,
+        ...(isPageContext(message.origin.context) && { context: 'content-script' }),
+      })
+    }
+
+    const resolvedSender = getSenderEndpoint()
     const sender = connMap.get(resolvedSender)
+
+    if (!sender) {
+      console.error('[webext-bridge/background] Cannot notify sender - not found in connMap:', {
+        resolvedSender,
+        messageOrigin: message.origin,
+        hops: message.hops,
+        connMapKeys: [...connMap.keys()]
+      })
+      return
+    }
 
     const receipt: DeliveryReceipt = {
       message,
@@ -317,6 +403,11 @@ browser.runtime.onConnect.addListener((incomingPort) => {
       // origin tab ID is resolved from the port identifier (also prevent "MITM attacks" of extensions)
       msg.message.origin.tabId = linkedTabId
       msg.message.origin.frameId = linkedFrameId
+
+      // Track request source for routing replies back
+      if (msg.message.messageType === 'message') {
+        requestSources.set(msg.message.transactionId, connArgs.endpointName)
+      }
 
       endpointRuntime.handleMessage(msg.message)
     }

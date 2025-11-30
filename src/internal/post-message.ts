@@ -6,7 +6,7 @@ export interface EndpointWontRespondError {
   transactionID: string
 }
 
-export const usePostMessaging = (thisContext: 'window' | 'content-script') => {
+export const usePostMessaging = (thisContext: 'window' | 'content-script' | 'iframe' | 'popup' | 'options' | 'devtools') => {
   let allocatedNamespace: string
   let messagingEnabled = false
   let onMessageCallback: (
@@ -18,7 +18,8 @@ export const usePostMessaging = (thisContext: 'window' | 'content-script') => {
     enable: () => (messagingEnabled = true),
     onMessage: (cb: typeof onMessageCallback) => (onMessageCallback = cb),
     postMessage: async(msg: InternalMessage | EndpointWontRespondError) => {
-      if (thisContext !== 'content-script' && thisContext !== 'window')
+      const validContexts = ['content-script', 'window', 'iframe', 'popup', 'options', 'devtools']
+      if (!validContexts.includes(thisContext))
         throw new Error('Endpoint does not use postMessage')
 
       if (!messagingEnabled)
