@@ -59,3 +59,10 @@ typings/
 
 # transpiled output
 dist
+
+# Claude Code
+.claude/
+
+# Playwright
+playwright-report/
+test-results/

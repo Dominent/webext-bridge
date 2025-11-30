@@ -23,10 +23,12 @@
   "author": "Neek Sandhu <neek.sandhu@outlook.com>",
   "scripts": {
     "build": "tsup src/index.ts src/background.ts src/content-script.ts src/devtools.ts src/options.ts src/popup.ts src/window.ts --format esm,cjs --dts",
+    "build:test-extension": "npx tsx tests/fixtures/test-extension/build.ts",
     "watch": "npm run build -- --watch",
-    "test": "playwright test",
-    "test:ui": "playwright test --ui",
-    "test:debug": "playwright test --debug",
+    "test": "npm run build && npm run build:test-extension && playwright test",
+    "test:ui": "npm run build && npm run build:test-extension && playwright test --ui",
+    "test:debug": "npm run build && npm run build:test-extension && playwright test --debug",
+    "prepare": "npm run build",
     "release": "bumpp --commit --push --tag && npm run build && npm publish"
   },
   "type": "module",
